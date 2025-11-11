@@ -1,0 +1,36 @@
+{
+  "brevo": {
+    "api_url": "https://api.brevo.com/v3",
+    "api_key_env": "BREVO_API_KEY",
+    "fallback_api_key": "SET_YOUR_API_KEY_IN_.env_OR_ENVIRONMENT"
+  },
+  "nocodb": {
+    "api_url": "https://app.nocodb.com/api/v2",
+    "api_key_env": "NOCODB_API_KEY",
+    "fallback_api_key": "SET_YOUR_API_KEY_IN_.env_OR_ENVIRONMENT",
+    "table_id": "your_table_id_here",
+    "base_url": "https://app.nocodb.com/#/your_base_path"
+  },
+  "csv": {
+    "output_file": "/Users/francesconguyen/brevo_campagne.csv",
+    "fieldnames": [
+      "id_campagna",
+      "nome_campagna",
+      "data_creazione",
+      "data_invio",
+      "stato",
+      "sent",
+      "delivered",
+      "unique_views",
+      "unique_clicks",
+      "tasso_apertura_pct",
+      "tasso_clic_pct",
+      "soft_bounces",
+      "hard_bounces",
+      "unsubscriptions",
+      "complaints",
+      "note",
+      "url_campagna"
+    ]
+  }
+}

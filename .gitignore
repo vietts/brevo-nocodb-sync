@@ -1,0 +1,35 @@
+# Configurazione sensibile
+brevo-nocodb-config.json
+.env
+.env.local
+.env.*.local
+
+# Log files
+*.log
+/tmp/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporanei
+*.tmp
+.cache/
