@@ -160,17 +160,18 @@ class NocODBClient:
             print(f"❌ Errore nel verificare la tabella: {e}")
             return False
 
-    def update_record(self, record_id: str, record_data: Dict) -> bool:
+    def update_record(self, record_id, record_data: Dict) -> bool:
         """Aggiorna un record esistente in NocoDB"""
         try:
             # L'endpoint per update è: /tables/{table_id}/records/{record_id}
+            # record_id è il valore del campo 'Id' di NocoDB
             url = f"{self.table_url}/{record_id}"
             response = requests.patch(url, headers=self.headers, json=record_data, timeout=10)
 
             if response.status_code in [200, 201]:
                 return True
             else:
-                print(f"  ⚠️  Errore nell'aggiornamento record {record_id}: {response.status_code}")
+                print(f"  ⚠️  Errore nell'aggiornamento record {record_id}: {response.status_code} - {response.text[:100]}")
                 return False
         except requests.exceptions.RequestException as e:
             print(f"  ❌ Errore nell'aggiornamento record: {e}")
@@ -270,6 +271,17 @@ def transform_campaign_data(campaign: Dict) -> Dict:
     tasso_apertura_pct = round((unique_views / base) * 100, 2) if delivered > 0 else 0
     tasso_clic_pct = round((unique_clicks / base) * 100, 2) if delivered > 0 else 0
 
+    # Estrai sender da Brevo - prova più formati possibili
+    sender = None
+    from_field = campaign.get('from')
+    if from_field:
+        if isinstance(from_field, dict):
+            # Prova email, poi name, poi l'intero dict
+            sender = from_field.get('email') or from_field.get('name') or str(from_field)
+        else:
+            # È una stringa
+            sender = str(from_field)
+
     # Mappa al formato della tabella NocoDB
     return {
         'id_campagna': str(campaign.get('id', '')),
@@ -285,7 +297,7 @@ def transform_campaign_data(campaign: Dict) -> Dict:
         'budget': None,
         'roi_pct': None,
         'note': campaign.get('subject', ''),
-        'sender': campaign.get('from', {}).get('email') if isinstance(campaign.get('from'), dict) else campaign.get('from'),
+        'sender': sender,
         'url_campagna': f"https://app.brevo.com/campaigns/{campaign.get('id', '')}"
     }
 
@@ -363,8 +375,9 @@ def sync_brevo_to_nocodb():
         new_records = [transform_campaign_data(campaign) for campaign in new_campaigns]
 
         # Trasforma i record da aggiornare (mantenendo record_id)
+        # Nota: NocoDB usa 'Id' (con I maiuscola) come campo identificativo
         updates = [
-            (existing_campaigns[campaign_id]['id'], transform_campaign_data(campaign))
+            (existing_campaigns[campaign_id]['Id'], transform_campaign_data(campaign))
             for campaign_id, campaign in campaigns_to_update
         ]
 
