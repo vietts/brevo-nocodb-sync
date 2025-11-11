@@ -285,6 +285,7 @@ def transform_campaign_data(campaign: Dict) -> Dict:
         'budget': None,
         'roi_pct': None,
         'note': campaign.get('subject', ''),
+        'sender': campaign.get('from', {}).get('email') if isinstance(campaign.get('from'), dict) else campaign.get('from'),
         'url_campagna': f"https://app.brevo.com/campaigns/{campaign.get('id', '')}"
     }
 
