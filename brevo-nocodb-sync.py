@@ -103,6 +103,31 @@ class NocODBClient:
             print(f"⚠️  Errore nel recupero record: {e}")
             return set()
 
+    def get_existing_campaigns_dict(self) -> Dict:
+        """Recupera tutti i record esistenti come dict con id_campagna come chiave"""
+        print("📋 Recuperando campagne dal database...")
+
+        try:
+            # Recupera tutti i record (con limite alto per essere sicuri)
+            url = f"{self.table_url}?limit=1000"
+            response = requests.get(url, headers=self.headers, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                # Crea un dict con id_campagna come chiave
+                campaigns_dict = {
+                    str(record.get('id_campagna')): record
+                    for record in data.get('list', [])
+                }
+                print(f"✅ Trovate {len(campaigns_dict)} campagne nel database")
+                return campaigns_dict
+            else:
+                print(f"⚠️  Non posso recuperare i record esistenti (status {response.status_code})")
+                return {}
+        except Exception as e:
+            print(f"⚠️  Errore nel recupero record: {e}")
+            return {}
+
     def verify_table(self) -> bool:
         """Verifica che la tabella sia accessibile"""
         print("🔍 Verificando accesso alla tabella NocoDB...")
@@ -135,6 +160,22 @@ class NocODBClient:
             print(f"❌ Errore nel verificare la tabella: {e}")
             return False
 
+    def update_record(self, record_id: str, record_data: Dict) -> bool:
+        """Aggiorna un record esistente in NocoDB"""
+        try:
+            # L'endpoint per update è: /tables/{table_id}/records/{record_id}
+            url = f"{self.table_url}/{record_id}"
+            response = requests.patch(url, headers=self.headers, json=record_data, timeout=10)
+
+            if response.status_code in [200, 201]:
+                return True
+            else:
+                print(f"  ⚠️  Errore nell'aggiornamento record {record_id}: {response.status_code}")
+                return False
+        except requests.exceptions.RequestException as e:
+            print(f"  ❌ Errore nell'aggiornamento record: {e}")
+            return False
+
     def insert_records(self, records: List[Dict]) -> None:
         """Inserisce i record nella tabella"""
         print(f"💾 Inserendo {len(records)} campagne in NocoDB...")
@@ -146,7 +187,7 @@ class NocODBClient:
                     response = requests.post(self.table_url, headers=self.headers, json=record, timeout=10)
 
                     if response.status_code in [200, 201]:
-                        print(f"  ✅ [{idx}/{len(records)}] {record.get('nome_campagna', 'N/A')}")
+                        print(f"  ✅ [{idx}/{len(records)}] {record.get('nome_campagna', 'N/A')} (NEW)")
                     elif response.status_code == 403:
                         # Prova senza i campi Currency e calcolati
                         simplified_record = {
@@ -160,7 +201,7 @@ class NocODBClient:
                         response = requests.post(self.table_url, headers=self.headers, json=simplified_record, timeout=10)
 
                         if response.status_code in [200, 201]:
-                            print(f"  ✅ [{idx}/{len(records)}] {record.get('nome_campagna', 'N/A')} (formato semplificato)")
+                            print(f"  ✅ [{idx}/{len(records)}] {record.get('nome_campagna', 'N/A')} (NEW - formato semplificato)")
                         else:
                             print(f"  ⚠️  [{idx}/{len(records)}] {record.get('nome_campagna', 'N/A')} - Errore: {response.status_code}")
                             # Debug: stampa il primo errore 403
@@ -176,6 +217,27 @@ class NocODBClient:
         except Exception as e:
             print(f"❌ Errore nell'inserimento dati: {e}")
             raise
+
+    def sync_records(self, new_records: List[Dict], updates: List[tuple]) -> None:
+        """Sincronizza i record: inserisce i nuovi e aggiorna gli esistenti"""
+        # Inserisce i nuovi record
+        if new_records:
+            self.insert_records(new_records)
+
+        # Aggiorna i record esistenti
+        if updates:
+            print(f"🔄 Aggiornando {len(updates)} campagne in NocoDB...")
+            for idx, (record_id, record_data) in enumerate(updates, 1):
+                try:
+                    success = self.update_record(record_id, record_data)
+                    if success:
+                        print(f"  ✅ [{idx}/{len(updates)}] {record_data.get('nome_campagna', 'N/A')} (UPDATE)")
+                    else:
+                        print(f"  ⚠️  [{idx}/{len(updates)}] {record_data.get('nome_campagna', 'N/A')} - Errore nell'aggiornamento")
+                except Exception as e:
+                    print(f"  ❌ [{idx}/{len(updates)}] Errore aggiornamento: {e}")
+
+                time.sleep(0.2)  # Rate limiting
 
 
 def map_brevo_status(status: str) -> str:
@@ -256,54 +318,68 @@ def sync_brevo_to_nocodb():
             print("❌ Impossibile accedere alla tabella NocoDB")
             exit(1)
 
-        # 4. Recuperare gli ID delle campagne già sincronizzate
-        existing_ids = nocodb.get_existing_campaign_ids()
+        # 4. Recuperare tutti i record esistenti dal database (come dict)
+        existing_campaigns = nocodb.get_existing_campaigns_dict()
 
-        # 5. Filtrare le campagne da sincronizzare:
-        #    - Tutte le nuove (non in existing_ids)
-        #    - Tutte quelle NON in stato "Sent" (potrebbero avere dati aggiornati)
-        campaigns_to_sync = [
-            c for c in all_campaigns
-            if str(c.get('id')) not in existing_ids or c.get('status') != 'Sent'
-        ]
+        # 5. Separare le campagne da Brevo in nuove e da aggiornare:
+        #    - NUOVE: non presenti in existing_campaigns
+        #    - AGGIORNAMENTO: presenti in existing_campaigns E status ≠ 'Sent'
+        new_campaigns = []
+        campaigns_to_update = []
 
-        # Separa le nuove dalle campagne in aggiornamento
-        new_campaigns = [c for c in campaigns_to_sync if str(c.get('id')) not in existing_ids]
-        campaigns_updating = [c for c in campaigns_to_sync if str(c.get('id')) in existing_ids]
+        for campaign in all_campaigns:
+            campaign_id = str(campaign.get('id'))
+            if campaign_id not in existing_campaigns:
+                # Campagna nuova
+                new_campaigns.append(campaign)
+            elif campaign.get('status') != 'sent':
+                # Campagna esistente ma non in stato "Sent" → aggiornamento necessario
+                campaigns_to_update.append((campaign_id, campaign))
 
-        if not campaigns_to_sync:
+        # Se nulla da fare, esci
+        if not new_campaigns and not campaigns_to_update:
             logger.info(f"ℹ️  Nessuna campagna da sincronizzare")
             logger.info(f"📊 Tutte le {len(all_campaigns)} campagne sono già sincronizzate e in stato 'Sent'")
             print("\n✨ Nessuna campagna da sincronizzare")
             print(f"📊 Tutte le {len(all_campaigns)} campagne sono già sincronizzate e in stato 'Sent'")
             return
 
-        # Logica per inserire o aggiornare
+        # Log delle operazioni
         if new_campaigns:
-            logger.info(f"📥 Nuove campagne da sincronizzare: {len(new_campaigns)}")
+            logger.info(f"📥 Nuove campagne da inserire: {len(new_campaigns)}")
             print(f"\n📥 Nuove campagne: {len(new_campaigns)}")
 
-        if campaigns_updating:
-            logger.info(f"🔄 Campagne in aggiornamento (non in stato 'Sent'): {len(campaigns_updating)}")
-            print(f"🔄 Campagne in aggiornamento: {len(campaigns_updating)}")
+        if campaigns_to_update:
+            logger.info(f"🔄 Campagne da aggiornare (non in stato 'Sent'): {len(campaigns_to_update)}")
+            print(f"🔄 Campagne da aggiornare: {len(campaigns_to_update)}")
 
-        logger.info(f"📥 Totale campagne da sincronizzare: {len(campaigns_to_sync)} su {len(all_campaigns)}")
-        print(f"📥 Totale da sincronizzare: {len(campaigns_to_sync)} su {len(all_campaigns)}")
+        total = len(new_campaigns) + len(campaigns_to_update)
+        logger.info(f"📥 Totale operazioni: {total} su {len(all_campaigns)}")
+        print(f"📥 Totale operazioni: {total} su {len(all_campaigns)}")
 
-        # 6. Trasformare e inserire i dati
-        records = [transform_campaign_data(campaign) for campaign in campaigns_to_sync]
-        nocodb.insert_records(records)
+        # 6. Trasformare i dati e sincronizzare
+        # Trasforma i nuovi record
+        new_records = [transform_campaign_data(campaign) for campaign in new_campaigns]
+
+        # Trasforma i record da aggiornare (mantenendo record_id)
+        updates = [
+            (existing_campaigns[campaign_id]['id'], transform_campaign_data(campaign))
+            for campaign_id, campaign in campaigns_to_update
+        ]
+
+        # Sincronizza (insert + update)
+        nocodb.sync_records(new_records, updates)
 
         logger.info(f"✨ Sincronizzazione completata con SUCCESSO")
         logger.info(f"📊 {len(new_campaigns)} nuove campagne sincronizzate")
-        logger.info(f"🔄 {len(campaigns_updating)} campagne aggiornate")
+        logger.info(f"🔄 {len(campaigns_to_update)} campagne aggiornate")
         logger.info(f"📈 Totale campagne nel database: {len(all_campaigns)}")
         logger.info("STATUS: ✅ OK")
         logger.info("="*80 + "\n")
 
         print("\n✨ Sincronizzazione completata!")
         print(f"📊 {len(new_campaigns)} nuove campagne sincronizzate")
-        print(f"🔄 {len(campaigns_updating)} campagne aggiornate")
+        print(f"🔄 {len(campaigns_to_update)} campagne aggiornate")
         print(f"📈 Totale campagne nel database: {len(all_campaigns)}")
 
     except Exception as e:
