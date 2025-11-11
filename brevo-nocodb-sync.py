@@ -50,7 +50,7 @@ class BrevoClient:
         try:
             url = f"{self.base_url}/emailCampaigns"
             params = {"statistics": "globalStats"}
-            response = requests.get(url, headers=self.headers, params=params, timeout=10)
+            response = requests.get(url, headers=self.headers, params=params, timeout=30)
             response.raise_for_status()
 
             campaigns = response.json().get('campaigns', [])
@@ -271,16 +271,18 @@ def transform_campaign_data(campaign: Dict) -> Dict:
     tasso_apertura_pct = round((unique_views / base) * 100, 2) if delivered > 0 else 0
     tasso_clic_pct = round((unique_clicks / base) * 100, 2) if delivered > 0 else 0
 
-    # Estrai sender da Brevo - prova più formati possibili
+    # Estrai sender direttamente da Brevo (campo 'sender' della campagna)
+    # Brevo ritorna il valore di sender come dict con i dettagli del mittente
+    sender_field = campaign.get('sender')
     sender = None
-    from_field = campaign.get('from')
-    if from_field:
-        if isinstance(from_field, dict):
-            # Prova email, poi name, poi l'intero dict
-            sender = from_field.get('email') or from_field.get('name') or str(from_field)
+
+    if sender_field:
+        if isinstance(sender_field, dict):
+            # Prova email, poi name, poi l'intero dict come string
+            sender = sender_field.get('email') or sender_field.get('name') or sender_field.get('senderName') or str(sender_field)
         else:
             # È una stringa
-            sender = str(from_field)
+            sender = str(sender_field)
 
     # Mappa al formato della tabella NocoDB
     return {
